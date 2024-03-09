@@ -1,6 +1,6 @@
 ###Glue-Data-catalog-database-resource block###########
 resource "aws_glue_catalog_database" "this" {
-  count = "${var."db-create ? 1 : 0}"
+  count = "${var.db-create ? 1 : 0}"
   name = "${var.db-name}"
   description  = "${var.db-description}"
   catalog_id   = "${var.db-catalog}"
@@ -79,7 +79,7 @@ resource "aws_glue_job" "this" {
   name               = "${var.job-name}"
   role_arn           = "${var.job-role-arn}"
   connections        = ["${var.job-connections}"]
-  allocated_capacity = "${var.job-dpu}"
+  
 
   command {
     script_location = "${var.job-script-location}"

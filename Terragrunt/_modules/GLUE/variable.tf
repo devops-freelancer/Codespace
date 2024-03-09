@@ -1,3 +1,7 @@
+variable "region" {
+  type = string
+  default = "ap-south-1"
+}
 ###Glue Catalog-database variables################
 variable "db-create" {
   default = true
@@ -134,7 +138,7 @@ variable "job-name" {}
 
 variable "job-role-arn" {}
 
-variable "job--connections" {
+variable "job-connections" {
   type    = "list"
   default = []
 }
