@@ -17,10 +17,9 @@ timeout          =  var.lambda_timeout
 role             =  aws_iam_role.lambda-role.arn
 environment {                                            }
 }
-
 resource "aws_lambda_event_source_mapping" "this" {
-  event_source_arn                  = aws_kinesis_stream.example.arn
-  function_name                     = aws_lambda_function.example.arn
+  event_source_arn                  = aws_msk_cluster.this.arn
+  function_name                     = aws_lambda_function.this.arn
   starting_position                 = "LATEST"
   batch_size                        = var.batch-size
   maximum_batching_window_in_seconds = var.maximum-batching-window-in-seconds

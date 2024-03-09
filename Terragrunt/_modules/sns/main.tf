@@ -18,6 +18,7 @@ resource "aws_cloudwatch_log_metric_filter" "this" {
   }
 }
 
+
 resource "aws_sns_topic_subscription" "this" {
   topic_arn = aws_sns_topic.this.arn
   protocol  = "email"
