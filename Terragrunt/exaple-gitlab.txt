@@ -1,0 +1,302 @@
+#parent-pipeline
+
+image: base-runner
+
+variables:
+  APP_PREFIX: "ss0x44"
+  ENV_VAR: .env
+  AWS_REGION: "us-east-1" 
+  REGION_SHORT: "use1" 
+  TF_VERSION: ""  
+  TG_VERSION: ""
+  ENV_TYPE: "blue"
+
+include:
+  - project: 'ss0x44/batch'
+    file: 'batch.gitlab-ci.yml'
+
+before_script:
+  - ./script/pre-requisite-install.sh
+stages:
+  - preparation
+  - build_&_package
+  - dev-deploy
+  - qa-deploy
+  - preprod-deploy
+  - prod-deploy
+  - notify-status
+
+preparation-job:
+  stage: preparation
+  script:
+    - source "$ENV_VAR" 
+    - ./scripts/select-stream.sh
+    - stream_selected
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .${CI_COMMIT_REF_SLUG}-cache/  
+      - selected_stream-$(date +%Y%m%d_%H%M%S).txt  
+    policy: push
+
+build_&_package-job:
+  stage:  build_&_package
+  needs: [ci-select-stream-job]
+  script:
+    -  source "$ENV_VAR"
+    -  source stream_selected.txt
+    - ./scripts/packaging.sh
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - ./scripts/  
+      - build-package.txt  
+    policy: push
+
+dev-deploy-job:
+  stage: dev-deploy
+  image: hashicorp/terraform:1.4.6
+  environment:
+    name: dev
+  variables:
+    HCL_FILE_PATH: "./${CI_JOB_NAME}/terragrunt/env/${AWS_REGION}/${CI_ENVIRONMENT_NAME}/" 
+    ENV_TYPE: ""  # add green here to override default value blue to green.
+  script: 
+    - ./script/tg-run.sh
+    - tg_init
+    - tg_validate
+    - tg_fmt
+    - tg_plan tf_plan -out=tfplan 
+    - tg_apply tfplan
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - ${TF_ROOT}/.terraform
+  only:
+    - main
+
+qa-deploy-job:
+  stage: qa-deploy
+  image: hashicorp/terraform:1.4.6
+  environment:
+    name: qa  
+  variables:
+    HCL_FILE_PATH: "./${CI_JOB_NAME}/terragrunt/env/${AWS_REGION}/${CI_ENVIRONMENT_NAME}/"   
+    ENV_TYPE: ""  # add green here to override default value blue to green.
+  script: 
+    - ./script/tg-run.sh
+    - tg_init
+    - tg_validate
+    - tg_fmt
+    - tg_plan tf_plan -out=tfplan 
+    - tg_apply tfplan
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - ${TF_ROOT}/.terraform
+  only:
+    - main
+
+preprod-deploy-job:
+  stage: preprod-deploy
+  image: hashicorp/terraform:1.4.6
+  environment:
+    name: preprod
+  variables:
+    HCL_FILE_PATH: "./${CI_JOB_NAME}/terragrunt/env/${AWS_REGION}/${CI_ENVIRONMENT_NAME}/" 
+    ENV_TYPE: ""  # add green here to override default value blue to green.
+  script: 
+    - ./script/tg-run.sh
+    - tg_init
+    - tg_validate
+    - tg_fmt
+    - tg_plan tf_plan -out=tfplan 
+    - tg_apply tfplan
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - ${TF_ROOT}/.terraform
+  only:
+    - main
+
+prod-deploy-job:
+  stage: prod-deploy
+  image: hashicorp/terraform:1.4.6
+  environment:
+    name: prod
+  variables:
+    HCL_FILE_PATH: "./${CI_JOB_NAME}/terragrunt/env/${AWS_REGION}/${CI_ENVIRONMENT_NAME}/"  
+    ENV_TYPE: ""  # add green here to override default value blue to green.
+    ci_vars: "${BASE_PATH}/${CI_ENVIRONMENT_NAME}/${ENV_TYPE}/dev.tfvars"
+  script: 
+    - ./script/tg-run.sh
+    - tg_init
+    - tg_validate
+    - tg_fmt
+    - tg_plan tf_plan -out=tfplan 
+    - tg_apply tfplan
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - ${TF_ROOT}/.terraform
+  only:
+    - main
+
+notify-status-job:
+  stage: notify-status  
+  script:
+    - case $CI_PIPELINE_STATUS in
+        success)          
+          echo "Pipeline ${CI_PIPELINE_ID} succeeded!"
+          ;;
+        failed)
+          echo "Pipeline ${CI_PIPELINE_ID} failed!"
+          ;;
+      esac
+
+#### downstream-pipeline
+variables:
+  GIT_REPO: "https://gitlab.com/$ORG_ID/downstream-project.git"
+  SONAR_PROJECT_KEY: "my-project-key"
+  RUN_BLUCKDUCK_SCAN: "true" 
+  RUN_GITSECRET_SCAN: "true"
+  RUN_QUALITYGATE_SCAN : "true"
+  RUN_SONAR_SCAN : "true"
+  RUN_SEMGREP_SCAN: "true"
+
+include:
+  - project: '$ORG_ID/shared-library'   
+    ref: 
+      - main
+      - /^release_.*$/
+    file: 'build.gitlab-ci.yml'
+
+gitsecret:
+  extends: .gitsecret-scan
+  when: $RUN_SCERET_SCAN == "true"
+  
+sonarqube:
+  extends: .sonarqube-scan
+  when: $RUN_SONAR_SCAN == "true"
+
+qualitygate:
+  extends: .qualitygate-scan
+  when: $RUN_QUALITYGATE_SCAN == "true"
+
+semgrep:
+  extends: .semgrep-scan
+  when: $RUN_SEMGREP_SCAN == "true"
+
+blackduck:
+  extends: .blackduck-scan
+  when: $RUN_BLACKDUCK_SCAN == "true"
+
+
+######shared-library-for-common-code
+
+image: maven:3.8-amazoncorretto-17
+
+variables:
+  SONAR_HOST_URL: "http://your-sonarqube-server:9000"
+  SEMGREP_REPO_URL: "https://your-semgrep-repo-url.com"
+  BLACKDUCK_URL: "https://your-blackduck-hub.com"
+  SEMGREP_REPO_NAME: "$CI_PROJECT_NAME"
+  SONAR_TOKEN: "$SONAR_TOKEN" 
+  BLACKDUCK_TOKEN: "$BLACKDUCK_TOKEN"
+  SEMGREP_TOKEN: "$TOKEN_SEMGREP"
+  
+  
+
+stages:
+  - gitsecret-scan
+  - preparation
+  - build_&_package
+  - sonarqube-scan
+  - qualitygate-scan
+  - semgrep-scan
+  - blackduck-scan
+
+gitsecret-scan-job:
+  stage: gitsecret-scan
+  before_script: 
+    - git clone --depth 1 $GIT_REPO
+  script:
+    - gitlab-secrets-detection --output-format json > ${CI_COMMIT_REF_SLUG}-secret_scan_report-$(date +%Y%m%d_%H%M%S).json
+  artifacts:
+    paths:
+      - ${CI_COMMIT_REF_SLUG}-secret_scan_report-$(date +%Y%m%d_%H%M%S).json
+  allow_failure: false
+  only:
+    - main
+    - /^release_.*$/
+  
+
+
+preparation-job:
+
+build_&_package-job:
+  variables:
+    - BUILD_VERION="$(git describe --always)" >> build.env
+    - BUILD_NUMBER = "$CI_JOB_ID" >> build.env
+  before_script:
+  stage: build_&_package
+  script: ./scripts/build.sh
+  artifacts:
+    key: build.env
+    path: build/
+    expire_in: 1 day
+  allow_failure: false
+  only:
+    - main
+    - /^release_.*$/
+
+sonarqube-job:
+  stage: sonarqube-scan
+  script:
+    - sonar-scanner -Dsonar.mode=publish -Dsonar.projectKey="$SONAR_PROJECT_KEY" -Dsonar.host.url="$SONAR_HOST_URL" -Dsonar.login="$SONAR_TOKEN" -Dsonar.qualitygates.wait=true -Dsonar.qualitygates.timeout=300  
+  allow_failure: false
+  only:
+    - main
+    - /^release_.*$/
+ 
+
+qualitygate-job:
+  stage: qualitygate-scan
+  script:
+    - ./scripts/sonar-sast-scan.sh
+  allow_failure: false
+  only:
+    - main
+    - /^release_.*$/
+ 
+
+semgrep-scan-job:
+  stage: semgrep-scan
+  script:
+    - ./scripts/semgrep-scan.sh
+  cache:
+    key: semgrep-venv
+    paths:
+      - ./semgrep-venv
+  artifacts:
+    reports:
+      junit: $CI_COMMIT_REF_NAME-semgrep-report-$(date +"%Y-%m-%d_%H-%M-%S").json
+  only:
+    - main
+    - /^release_.*$/
+
+blackduck-scan-job:
+  stage: blackduck-scan
+  script:
+    - ./scripts/blackduck.sh
+  cache:
+    key: blackduck-cache
+    paths:
+      - blackduck.env
+  artifacts:
+    reports:
+      junit: $CI_COMMIT_REF_NAME-Blackduck-report-$(date +"%Y-%m-%d_%H-%M-%S").json
+  only:
+    - main
+    - /^release_.*$/
+

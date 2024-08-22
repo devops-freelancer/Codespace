@@ -1,0 +1,325 @@
+########bluckduck-scan###########
+#!/bin/bash
+# Print the project name
+echo "Performing Black Duck scan on $CI_PROJECT_NAME"
+EXCLUDED_DIR=""
+BOOLEAN="True"
+MVN_BUILD_COMMAND="compile --settings settings.xml"
+TEAM="devops"
+# Run the Black Duck scan using Synopsys Detect
+java -jar appsec/synopsys-detect-release.jar \
+  --detect.project.application.id="${APP_PREFIX}" \
+  --detect.project.name="${APP_PREFIX}-${UNIT}-${ENV_NAME}" \
+  --detect.project.user.groups="${APP_PREFIX}-${TEAM}" \
+  --detect.project.version.name="${VERSION}" \
+  --detect.code.location.name="${APP_PREFIX}-${CI_PROJECT_NAME}-${VERSION}" \
+  --detect.source.path="${CI_PROJECT_PATH}" \
+  --detect.clone.project.versionlatest="${BOOLEAN}" \
+  --detect.excluded.directories="${EXCLUDED_DIR}" \
+  --detect.blackduck.signature.scanner.exclusion.name.patterns="${EXCLUDED_DIR}" \
+  --detect.detector.search.exclusion="${EXCLUDED_DIR}" \
+  --detect.maven.build.command= "${MVN_BUILD_COMMAND}"\
+  --blackduck.api.token="${BLACKDUCK_API_TOKEN}" \
+  --blackduck.api.url="${BLACKDUCK_URL}" \
+  --blackduck.api.trust.cert="${BOOLEAN}"
+
+
+########semgrep-scan###########
+#!/bin/bash
+echo "Creating and activating a virtual environment for $SEMGREP_REPO_NAME"
+python3 -m venv ./semgrep-venv
+source ./semgrep-venv/bin/activate
+RC=$?
+
+if [[ $RC -ne 0 ]]; then echo "Error: Failed to activate virtual environment, last command returned exit code $RC.";exit 1 ;fi
+echo "Excluding virtual environment directories from Semgrep scan for $SEMGREP_REPO_NAME"
+echo "/semgrep-venv/bin/ /semgrep-venv/include/ /semgrep-venv/lib/ /semgrep-venv/lib64/" | xargs -n1 > .semgrepignore
+echo "Installing dependencies associated with Semgrep..."
+
+pip3 install --upgrade pip --quiet
+RC=$?
+if [[ $RC -ne 0 ]]; then echo "Error: Failed to upgrade pip, exit code $RC."; exit 1; fi
+pip3 install --upgrade semgrep --quiet
+
+RC=$?
+if [[ $RC -ne 0 ]]; then echo "Error: Unable to install Semgrep, pip3 install command returned exit code $RC."; exit 1; fi
+semgrep_ver=$(semgrep --version); echo "Semgrep version $semgrep_ver is Suceessfully Installed "
+echo "Running Semgrep CI scan..."
+
+semgrep ci --app-token "$SEMGREP_APP_TOKEN" --repo-name "$SEMGREP_REPO_NAME" --repo-url "$SEMGREP_REPO_URL"
+RC=$?
+if [[ $RC -ne 0 ]]; then echo "Error: Semgrep CI scan failed, exit code $RC." ;exit 1;fi
+
+semgrep --config auto "$CI_PROJECT_DIR/src" --verbose
+RC=$?
+if [[ $RC -ne 0 ]]; then echo "Error: Semgrep scan failed, exit code $RC."; exit 1; fi
+echo "Semgrep scan completed successfully."
+
+########stream-config###########
+
+#!/bin/bash
+
+configfile="streamConfig.json"
+
+echo "Reading lambda units from file..."
+echo "$configfile" | jq -r '.UNITS[]' | while IFS=': ' read -r UNITS VERSIONS ; do
+UNITS=$UNITS
+VERSION=$VERSIONS
+done
+
+echo "Reading pipeline streams from file..."
+STREAMS=$(jq -r '.STREAMS[]' "$configfile"); echo "STREAMS:"
+for STREAM in $STREAMS; do echo "$STREAM"; done
+
+
+echo "Reading pipeline groups from file..."
+$STREAM_GROUPS=$(jq -r '.$STREAM_GROUPS | to_entries[] | "\(.key): \(.value | join(", "))"' "$configfile")
+echo "PIPELINE_GROUPS:"
+
+
+stream_selected() {
+  echo "Selecting pipeline for group: $STREAM_GROUP"
+  if [[ "$STREAM_GROUP" == "MH" ]]; then
+    STREAM_SELECTED=("AMT:selected" "ABAD:selected")
+  elif [[ "$STREAM_GROUP" == "GJ" ]]; then
+    STREAM_SELECTED=("SRT:selected" "AMBD:selected")
+  elif [[ "$STREAM_GROUP" == "TN" ]]; then
+    STREAM_SELECTED=("CHN:selected" "MDRI:selected")
+  elif [[ "$STREAM_GROUP" == "TL" ]]; then
+    STREAM_SELECTED=("PDC:selected" "HYD:selected")
+  else
+    echo "Unknown Pipeline Group: $STREAM_GROUP"
+    exit 1
+  fi
+ 
+  echo "Selected pipelines: ${PIPELINE_SELECTED[@]}"
+  for STREAM in "${STREAMS[@]}"; do
+    for STREAM_GROUP in "${STREAM_SELECTED[@]}"; do
+      if [[ "$STREAM" == "$STREAM:selected" ]]; then
+        echo "Match found: $STREAM corresponds to $STREAM_GROUP"
+      fi      
+    done
+  done
+  echo "end of selection of STREAM"
+}
+
+
+
+################terraform_exectuion_autoation############
+run_terraform() {
+    command="$@"; echo "Running: $command"; "$@" || { echo "Error: $command failed with exit code $?"; exit 1; }
+}
+# Function to validate Terraform configuration
+tf_validate() {
+    run_terraform terraform validate
+}
+# Function to format Terraform configuration files
+tf_fmt() {
+    run_terraform terraform fmt
+}
+# Function to initialize Terraform
+tf_init() {
+    run_terraform terraform init
+}
+# Function to create an execution plan for Terraform
+tf_plan() {
+    run_terraform terraform plan "$@"
+}
+# Function to apply the Terraform configuration
+tf_apply() {
+    run_terraform terraform apply "$@"
+}
+# Example usage of the functions
+# Uncomment the lines below to test the functions
+# tf_validate
+# tf_fmt
+# tf_init
+# tf_plan -out=tfplan
+# tf_apply tfplan
+
+
+
+
+####################package instaltion in linux #################
+
+check_command() {
+    if [ $? -eq 0 ]; then echo "$1 successful"; else echo "$1 failed"; exit 1; fi
+}
+# Update package list and install unzip
+apt-get update && apt-get install -y unzip  
+curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add -
+check_command "apt-get update && apt-get install -y unzip" ; echo "Unzip  Installation completed successfully"
+
+# install jq 
+apt-get install -y jq
+check_command "apt-get install -y unzip" ; echo "Unzip  Installation completed successfully"
+
+# Add HashiCorp repository
+apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+check_command "apt-add-repository"
+
+# Download and install Terraform
+wget https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip
+unzip "terraform_${TF_VERSION}_linux_amd64.zip"
+mv terraform /usr/local/bin/
+chmod +x /usr/local/bin/terraform
+check_command "make terraform executable"
+echo "Terraform Installation completed successfully"
+
+# Download and install Terragrunt
+wget https://github.com/gruntwork-io/terragrunt/releases/download/${TG_VERSION}/terragrunt_linux_amd64
+mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+chmod +x /usr/local/bin/terragrunt
+check_command "make terragrunt executable"
+echo "Terragrunt Installation completed successfully"
+
+
+
+##############################################################
+
+#!/bin/bash
+config=$(cat streamConfig.json)
+
+STREAM_GROUPS=$(echo "$config" | jq -r 'STREAM_GROUPS | to_entries[] | "\(.key): \(.value | join(", "))"')
+UNITS=$(echo "$config" | jq -r '.units[]')
+REPO=$(echo "$config" | jq -r '.repos[]')
+VERSION=$(echo "$config" | jq -r '.version')
+
+for STREAM_GROUP in $STREAM_GROUPS; do
+  STREAM_GROUP_NAME=$(echo "$STREAM_GROUP" | jq -r '.key')
+  STREAMS=$(echo "$STREAM_GROUP" | jq -r '.value[]')
+  echo "Selected STREAM_GROUP: $STREAM_GROUP_NAME"
+  echo "Selelcted STREAMS are: $STREAMS"
+
+  for STREAM in "${STREAMS[@]}"; do
+    for ((i=0; i<${#UNIT[@]}; i++)); do  
+     if [[ "${UNIT[$i]}" == "lambda-unit-1" && "${REPO[$i]}" == "https://www.gitrepoforlambda1.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-2" && "${REPO[$i]}" == "https://www.gitrepoforlambda2.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-3" && "${REPO[$i]}" == "https://www.gitrepoforlambda3.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-4" && "${REPO[$i]}" == "https://www.gitrepoforlambda4.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+   	    elif [[ "${UNIT[$i]}" == "lambda-unit-5" && "${REPO[$i]}" == "https://www.gitrepoforlambda5.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-6" && "${REPO[$i]}" == "https://www.gitrepoforlambda6.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-7" && "${REPO[$i]}" == "https://www.gitrepoforlambda7.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     elif [[ "${UNIT[$i]}" == "lambda-unit-8" && "${REPO[$i]}" == "https://www.gitrepoforlambda8.git" ]]; then
+           echo "Selected STREAM is : $STREAM"
+           STREAM=$STREAM
+           echo "Selected UNIT is : ${UNIT[$i]}"
+           UNIT=${UNIT[$i]}
+           echo "Selected UNIT/PROJECT Git Repo is : ${REPO[$i]}"
+           PROJEJECT_REPO=${REPO[$i]}
+           echo "Selected PROJECT version is : $VERSION"
+           VERSION=$VERSION
+     fi
+   done
+  done
+done
+
+
+############################################################
+
+locals {
+  # Automatically load account-level variables
+  APP_PREFIX = "ss0x44"
+  account_vars = read_terragrunt_config(find_in_parent_folders("account.hcl"))
+  AWS_ROLE_ACCOUNT = local.account_vars.locals.AWS_ROLE_ACCOUNT
+  AWS_ROLE=  local.account_vars.locals.AWS_ROLE
+}
+
+# Generate an AWS provider block
+generate "provider" {
+  path      = "provider.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<EOF
+provider "aws" {
+  region = "${AWS_REGION}"
+  # Only these AWS Account IDs may be operated on by this template
+  allowed_account_ids = ["${PROD_ACCOUNT_ID},${PREPROD_ACCOUNT_ID}"]
+}
+  # Assume a specific role before interacting with AWS resources
+  assume_role {
+    role_arn = "arn:aws:iam::${AWS_ROLE_ACCOUNT}:role/${AWS_ROLE}"
+  }
+EOF
+}
+# Configure Terragrunt to automatically store tfstate files in an S3 bucket
+remote_state {
+  backend = "s3"
+  config = {
+    encrypt        = true
+    bucket         = "${local.APP_PREFIX}-${STREAM}-tfstate-bucket-${CI_ENVIRONMENT_NAME}-${ENV_NAME}-${REGION_SHORT}"
+    key            = "${STREAM}-${ENV_NAME}-${REGION_SHORT}-state/terraform.tfstate"
+    region         = "${AWS_REGION}"
+    dynamodb_table = "tfstate-locks"
+  }
+  generate = {
+    path      = "backend.tf"
+    if_exists = "overwrite_terragrunt"
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
